@@ -239,7 +239,7 @@ export default function AutonomousPlanner() {
     simClockRafRef.current = null
   }, [])
 
-  // Animate spacecraft along the computed transfer over real time of the transfer
+  // Optimized animation with throttled Plotly updates for better performance
   const animateAlong = useCallback((points: { x: number; y: number; z: number }[], durationMs: number) => {
     if (!points.length || durationMs <= 0) {
       const last = points[points.length - 1] || null
@@ -252,14 +252,23 @@ export default function AutonomousPlanner() {
     }
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     const start = performance.now()
+    let lastUpdateTime = 0
+    const updateInterval = 50 // Throttle Plotly updates to every 50ms (20fps) instead of 60fps
+    
     const step = (now: number) => {
       const p = Math.min(1, (now - start) / durationMs)
       const idx = Math.min(points.length - 1, Math.floor(p * (points.length - 1)))
       const pos = points[idx]
 
-      if (plotDivRef.current != null && spacecraftTraceIndexRef.current != null) {
-        Plotly.restyle(plotDivRef.current, { x: [[pos.x]], y: [[pos.y]], z: [[pos.z]] }, [spacecraftTraceIndexRef.current])
+      // Throttle Plotly updates for better performance
+      if (now - lastUpdateTime >= updateInterval) {
+        if (plotDivRef.current != null && spacecraftTraceIndexRef.current != null) {
+          Plotly.restyle(plotDivRef.current, { x: [[pos.x]], y: [[pos.y]], z: [[pos.z]] }, [spacecraftTraceIndexRef.current])
+        }
+        lastUpdateTime = now
       }
+
+      setCurrentPos(pos) // Update React state more frequently for smooth UI
 
       const timeline = riskTimelineRef.current
       if (timeline && timeline.length > 1) {
@@ -274,7 +283,7 @@ export default function AutonomousPlanner() {
           setReplanTriggered(true)
           appendLog({ timestamp: new Date().toISOString(), type: "warn", message: "Hazard high. Switching to replanned trajectory." })
           const remaining = durationMs * (1 - p)
-          const base = hohmannEllipsePoints(EARTH_RADIUS + 200, EARTH_MOON_DISTANCE, 1500).points
+          const base = hohmannEllipsePoints(EARTH_RADIUS + 200, EARTH_MOON_DISTANCE, 150).points
           const alt = base.map((pt, i) => ({
             x: pt.x * 0.98,
             y: pt.y * 0.98,
@@ -344,7 +353,7 @@ export default function AutonomousPlanner() {
       const deltaV = Math.abs(vPer - v1) + Math.abs(v2 - vApo)
       const tSec = Math.PI * Math.sqrt(Math.pow(a, 3) / mu)
 
-      const { points } = hohmannEllipsePoints(r1, r2, 1500)
+      const { points } = hohmannEllipsePoints(r1, r2, 150) // Reduce from 1500 to 150 for performance
       setTrajectoryPoints(points)
       setMetrics({ deltaV, transferTimeHours: tSec / 3600, fuelEfficiency: Math.max(0, 100 - deltaV / 10) })
       appendLog({ timestamp: new Date().toISOString(), type: "info", message: "Trajectory calculation complete" })
@@ -365,34 +374,34 @@ export default function AutonomousPlanner() {
   }, [appendLog, timestamp, datasetUrl, datasetJson, animateAlong, speedMultiplier, startSimClock, stopSimClock])
 
   const plotData = useMemo(() => {
+    // Use fewer points for orbital rings for better performance
     const earthOrbit = {
-      x: Array.from({ length: 200 }, (_, i) => (EARTH_RADIUS + 200) * Math.cos((i / 199) * 2 * Math.PI)),
-      y: Array.from({ length: 200 }, (_, i) => (EARTH_RADIUS + 200) * Math.sin((i / 199) * 2 * Math.PI)),
-      z: Array(200).fill(0),
-      type: "scatter3d" as const,
+      x: Array.from({ length: 100 }, (_, i) => (EARTH_RADIUS + 200) * Math.cos((i / 99) * 2 * Math.PI)),
+      y: Array.from({ length: 100 }, (_, i) => (EARTH_RADIUS + 200) * Math.sin((i / 99) * 2 * Math.PI)),
+      z: Array(100).fill(0),
+      type: "scattergl" as const, // Use WebGL for better performance
       mode: "lines",
       name: "LEO",
-      line: { color: "#6b7280" },
+      line: { color: "#6b7280", width: 2 },
     }
     const moonOrbit = {
-      x: Array.from({ length: 200 }, (_, i) => EARTH_MOON_DISTANCE * Math.cos((i / 199) * 2 * Math.PI)),
-      y: Array.from({ length: 200 }, (_, i) => EARTH_MOON_DISTANCE * Math.sin((i / 199) * 2 * Math.PI)),
-      z: Array(200).fill(0),
-      type: "scatter3d" as const,
+      x: Array.from({ length: 100 }, (_, i) => EARTH_MOON_DISTANCE * Math.cos((i / 99) * 2 * Math.PI)),
+      y: Array.from({ length: 100 }, (_, i) => EARTH_MOON_DISTANCE * Math.sin((i / 99) * 2 * Math.PI)),
+      z: Array(100).fill(0),
+      type: "scattergl" as const, // Use WebGL for better performance
       mode: "lines",
       name: "Moon Orbit",
-      line: { color: "#94a3b8" },
+      line: { color: "#94a3b8", width: 2 },
     }
     const transfer = trajectoryPoints.length
       ? {
           x: trajectoryPoints.map((p) => p.x),
           y: trajectoryPoints.map((p) => p.y),
           z: trajectoryPoints.map((p) => p.z),
-          type: "scatter3d" as const,
-          mode: "lines+markers",
+          type: "scattergl" as const, // Use WebGL for better performance
+          mode: "lines", // Remove markers for better performance
           name: "Transfer",
-          line: { color: "#f97316", width: 4 },
-          marker: { size: 2, color: "#f59e0b" },
+          line: { color: "#f97316", width: 3 },
         }
       : null
     const replan = altTrajectoryPoints && altTrajectoryPoints.length
@@ -400,10 +409,10 @@ export default function AutonomousPlanner() {
           x: altTrajectoryPoints.map((p) => p.x),
           y: altTrajectoryPoints.map((p) => p.y),
           z: altTrajectoryPoints.map((p) => p.z),
-          type: "scatter3d" as const,
+          type: "scattergl" as const, // Use WebGL for better performance
           mode: "lines",
           name: "Replan",
-          line: { color: "#60a5fa", width: 3, dash: "dot" },
+          line: { color: "#60a5fa", width: 2, dash: "dot" },
         }
       : null
 
@@ -412,10 +421,10 @@ export default function AutonomousPlanner() {
       x: [startPos.x],
       y: [startPos.y],
       z: [startPos.z],
-      type: "scatter3d" as const,
+      type: "scattergl" as const, // Use WebGL for better performance
       mode: "markers",
       name: "Spacecraft",
-      marker: { size: 6, color: "#22c55e", line: { color: "#065f46", width: 1 } },
+      marker: { size: 8, color: "#22c55e", line: { color: "#065f46", width: 2 } },
     }
 
     return [earthOrbit, moonOrbit, transfer, replan, spacecraft].filter(Boolean)
@@ -425,19 +434,40 @@ export default function AutonomousPlanner() {
     autosize: true,
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
-    // Remove static uirevision to prevent rendering interference
     scene: {
-      xaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
-      yaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
-      zaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
+      xaxis: { 
+        title: "km", 
+        gridcolor: "#334155", 
+        zerolinecolor: "#334155", 
+        color: "#e5e7eb",
+        showgrid: true,
+        gridwidth: 1 // Thinner grid for better performance
+      },
+      yaxis: { 
+        title: "km", 
+        gridcolor: "#334155", 
+        zerolinecolor: "#334155", 
+        color: "#e5e7eb",
+        showgrid: true,
+        gridwidth: 1
+      },
+      zaxis: { 
+        title: "km", 
+        gridcolor: "#334155", 
+        zerolinecolor: "#334155", 
+        color: "#e5e7eb",
+        showgrid: true,
+        gridwidth: 1
+      },
       aspectmode: "data" as const,
-      dragmode: "turntable" as const, // Use turntable for smoother 3D interaction
+      dragmode: "turntable" as const,
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
     showlegend: true,
     legend: { font: { color: "#e5e7eb" }, x: 0, y: 1, xanchor: "left" as const, yanchor: "top" as const },
-    // Performance optimizations
-    hovermode: 'closest', // Reduce hover computation overhead
+    // Enhanced performance optimizations
+    hovermode: false, // Disable hover for maximum performance
+    clickmode: 'none', // Disable click events
   }), [])
 
   const plotConfig = useMemo(() => ({
