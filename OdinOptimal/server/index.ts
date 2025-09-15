@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
@@ -35,6 +36,9 @@ app.use((req, res, next) => {
 
   next();
 });
+
+// Set Python backend URL for the existing proxy in routes.ts
+process.env.PY_BACKEND_URL = 'http://localhost:3001';
 
 (async () => {
   const server = await registerRoutes(app);
