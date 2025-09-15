@@ -378,32 +378,39 @@ export default function AutonomousPlanner() {
     autosize: true,
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
-    uirevision: "planner",
+    // Remove static uirevision to prevent rendering interference
     scene: {
       xaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
       yaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
       zaxis: { title: "km", gridcolor: "#334155", zerolinecolor: "#334155", color: "#e5e7eb" },
       aspectmode: "data" as const,
-      dragmode: "pan" as const,
-      uirevision: "planner",
+      dragmode: "turntable" as const, // Use turntable for smoother 3D interaction
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
     showlegend: true,
     legend: { font: { color: "#e5e7eb" }, x: 0, y: 1, xanchor: "left" as const, yanchor: "top" as const },
+    // Performance optimizations
+    hovermode: 'closest', // Reduce hover computation overhead
   }), [])
 
   const plotConfig = useMemo(() => ({
     displayModeBar: true,
-    scrollZoom: true,
+    scrollZoom: false, // Disable scroll zoom to reduce jittering
     responsive: true,
     doubleClick: "reset",
+    // Reduce mode bar buttons to improve performance
     modeBarButtonsToAdd: [
-      "pan3d",
-      "zoom3d",
       "resetCameraDefault3d",
       "orbitRotation",
-      "tableRotation",
     ],
+    // Performance optimizations
+    staticPlot: false,
+    editable: false,
+    toImageButtonOptions: {
+      format: 'png',
+      filename: 'odin-trajectory',
+      scale: 1
+    }
   }), [])
 
   return (
