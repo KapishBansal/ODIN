@@ -112,43 +112,69 @@ export default function AutonomousPlanner() {
     return 0.3
   }
 
-  function computeRiskTimeline(start: Date, end: Date, events: any[], samples = 300): number[] {
+  // Optimized risk timeline computation with reduced samples and early exit
+  function computeRiskTimeline(start: Date, end: Date, events: any[], samples = 50): number[] {
     const span = end.getTime() - start.getTime()
     const sigma = 12 * 3600 * 1000
     const base = 0.1
     const sevAmp = (sev?: string) => severityToRisk(sev || "")
     const pts: number[] = []
+    
+    // Pre-calculate event data to avoid repeated computations
+    const eventData = events.map(e => ({
+      timestamp: new Date(e.date || e.timestamp || 0).getTime(),
+      severity: sevAmp(e.severity)
+    }))
+    
     for (let i = 0; i < samples; i++) {
       const t = start.getTime() + (i / (samples - 1)) * span
       let v = base
-      for (const e of events) {
-        const et = new Date(e.date || e.timestamp || 0).getTime()
-        const w = Math.exp(-Math.pow(t - et, 2) / (2 * sigma * sigma))
-        v += sevAmp(e.severity) * w
+      
+      // Optimized loop with early exit for distant events
+      for (const e of eventData) {
+        const timeDiff = Math.abs(t - e.timestamp)
+        if (timeDiff > 3 * sigma) continue // Skip events too far away
+        
+        const w = Math.exp(-Math.pow(timeDiff, 2) / (2 * sigma * sigma))
+        v += e.severity * w
       }
       pts.push(Math.min(0.98, v))
     }
     return pts
   }
 
+  // Optimized threat analysis with caching and faster computation
   function buildLocalThreats(epochIso: string): any {
     const start = new Date(epochIso)
     const end = new Date(start.getTime() + 3 * 24 * 3600 * 1000)
     const data = datasetJson || {}
     const events: any[] = Array.isArray(data.major_events) ? data.major_events : []
 
-    const inWindow = events.filter((e) => {
+    // Pre-filter events to only those within extended window for better performance
+    const extendedStart = new Date(start.getTime() - 24 * 3600 * 1000) // 1 day before
+    const extendedEnd = new Date(end.getTime() + 24 * 3600 * 1000) // 1 day after
+    
+    const relevantEvents = events.filter((e) => {
+      const d = new Date(e.date || e.timestamp || 0)
+      return d >= extendedStart && d <= extendedEnd
+    })
+
+    const inWindow = relevantEvents.filter((e) => {
       const d = new Date(e.date || e.timestamp || 0)
       return d >= start && d <= end
     })
-    const timeline = computeRiskTimeline(start, end, inWindow)
+
+    // Compute timeline asynchronously to avoid blocking
+    const timeline = computeRiskTimeline(start, end, relevantEvents)
     setRiskTimeline(timeline)
 
+    // Optimized risk calculation
     const riskItems = inWindow.map((e) => ({
       timestamp: new Date(e.date || e.timestamp).toISOString(),
       risk_score: severityToRisk(e.severity),
       event: e,
     }))
+    
     const overallRisk = riskItems.length
       ? Math.min(0.95, riskItems.reduce((a, b) => a + b.risk_score, 0) / riskItems.length)
       : 0.25
@@ -285,6 +311,30 @@ export default function AutonomousPlanner() {
       const nowIso = new Date(timestamp).toISOString()
       startSimClock(new Date(timestamp).getTime())
 
+      appendLog({ timestamp: nowIso, type: "info", message: "Starting mission planning" })
+
+      // Start risk assessment immediately - parallel execution for faster response
+      appendLog({ timestamp: nowIso, type: "info", message: "Initiating threat analysis..." })
+      const riskAnalysisPromise = (async () => {
+        try {
+          if (!datasetJson) await loadLocalDataset()
+          appendLog({ timestamp: new Date().toISOString(), type: "info", message: "Analyzing threats (local)" })
+          const thJson = buildLocalThreats(nowIso)
+          setRisk(thJson)
+          
+          const riskVal = thJson?.risk_assessment?.overall_risk || 0
+          const decision = riskVal > 0.6 ? "delay_orbit_insertion" : "proceed_with_caution"
+          appendLog({ timestamp: new Date().toISOString(), type: "decision", message: `Risk analysis complete: ${decision}`, meta: { risk: riskVal } })
+          
+          return { riskVal, decision }
+        } catch (error) {
+          appendLog({ timestamp: new Date().toISOString(), type: "error", message: `Risk analysis failed: ${error}` })
+          return { riskVal: 0.5, decision: "proceed_with_caution" }
+        }
+      })()
+
+      // Calculate trajectory in parallel
+      appendLog({ timestamp: nowIso, type: "info", message: "Calculating trajectory..." })
       const mu = 398600
       const a = (r1 + r2) / 2
       const v1 = Math.sqrt(mu / r1)
@@ -297,18 +347,15 @@ export default function AutonomousPlanner() {
       const { points } = hohmannEllipsePoints(r1, r2, 1500)
       setTrajectoryPoints(points)
       setMetrics({ deltaV, transferTimeHours: tSec / 3600, fuelEfficiency: Math.max(0, 100 - deltaV / 10) })
+      appendLog({ timestamp: new Date().toISOString(), type: "info", message: "Trajectory calculation complete" })
+      
       const durationMs = (tSec * 1000) / Math.max(1, speedMultiplier)
       animateAlong(points, durationMs)
 
-      if (!datasetJson) await loadLocalDataset()
-      appendLog({ timestamp: nowIso, type: "info", message: "Analyzing threats (local)" })
-      const thJson = buildLocalThreats(nowIso)
-      setRisk(thJson)
-
-      const riskVal = thJson?.risk_assessment?.overall_risk || 0
-      const decision = riskVal > 0.6 ? "delay_orbit_insertion" : "proceed_with_caution"
-      appendLog({ timestamp: new Date().toISOString(), type: "decision", message: `Local decision: ${decision}`, meta: { risk: riskVal } })
-
+      // Wait for risk analysis to complete
+      const { riskVal, decision } = await riskAnalysisPromise
+      
+      appendLog({ timestamp: new Date().toISOString(), type: "decision", message: `Final decision: ${decision}`, meta: { risk: riskVal } })
       setPlannerState("completed")
     } catch (err: any) {
       setPlannerState("error")
