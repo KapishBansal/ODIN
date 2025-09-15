@@ -48,7 +48,7 @@ process.env.PY_BACKEND_URL = 'http://localhost:3001';
     const message = err.message || "Internal Server Error";
 
     res.status(status).json({ message });
-    throw err;
+    log(`Error: ${message}`);
   });
 
   // importantly only setup vite in development and after
